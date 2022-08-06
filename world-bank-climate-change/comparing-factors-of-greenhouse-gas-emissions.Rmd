@@ -1,0 +1,429 @@
+---
+title: | 
+  | **Reducing Greenhouse Gas Emissions**
+  | Where Are Efforts Best Focused?
+author: "Adam Englund"
+output:
+  bookdown::pdf_document2: 
+    toc: false
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(ggpubr)
+library(gridExtra)
+library(ggrepel)
+library(MASS)
+library(ggfortify)
+library(leaps)
+library(glmnet)
+library(dplyr)
+library(plyr)
+setwd("/media/engo/ENGO2TBSG/notes/GradCertDataScience/STAT6020/Assignment 4/")
+wbcc <- read.csv("wbcc_bc.csv", stringsAsFactors=T)
+```
+
+```{r setup-data, include=FALSE}
+keep_columns <- c("AG.LND.AGRI.K2", "AG.LND.FRST.K2", "AG.YLD.CREL.KG", 
+                  "ER.H2O.FWTL.K3", "ER.LND.PTLD.ZS", 
+                  "EG.ELC.ACCS.ZS", "EG.ELC.COAL.ZS", "EG.ELC.HYRO.ZS", 
+                  "EG.ELC.NGAS.ZS", "EG.ELC.NUCL.ZS", "EG.ELC.PETR.ZS", 
+                  "EG.ELC.RNWX.ZS",
+                  "NV.AGR.TOTL.ZS", "IC.BUS.EASE.XQ", "BX.KLT.DINV.WD.GD.ZS", 
+                  "EN.ATM.GHGT.KT.CE", 
+                  "EG.USE.PCAP.KG.OE", "EG.USE.ELEC.KH.PC", "EG.ELC.RNEW.ZS",
+                  "EN.ATM.CO2E.PC", "EN.ATM.CO2E.KT", "EN.ATM.GHGO.KT.CE",
+                  "SP.POP.TOTL", 
+                  "iso3c", "country")
+wbcc_cln <- data.frame(wbcc[, keep_columns])
+wbcc_cln <- na.omit(wbcc_cln)
+```
+
+
+# **Abstract**
+
+Greenhouse gas emissions are considered the key contributor to global warming^[1]((https://www.ipcc.ch/sr15/chapter/chapter-1/))^.  Our goal is to see if the relative influence of the key indicators of greenhouse gas emissions can be measured and compared to get a sense of where effort should be prioritized. All of the data is from the [World Bank Group](https://data.worldbank.org/), under the topic of climate change. The methodological approach is to create a linear regression model from which the relative importance of different indicators of greenhouse gas emissions can be determined. The key takeaway from this analysis is that oil based energy may dwarf other concerns in regard to reducing greenhouse gas emissions, however more granular data is required to form any definitive conclusions.
+
+# **Introduction**
+
+We hear a lot about reducing emissions to tackle the problem of climate change. There is reporting on emissions targets, the Paris Climate Accords, carbon trading systems, over-population etc. It's reported that burning fossil fuels is something that needs to end, of beef and dairy being disastrous to the environment, and the challenges of renewable energy. There is agreement (for the most part) that all of these challenges are important in addressing climate change. However, whenever we are faced with finding a solution to a multi-faceted problem, a good first step is to priotize the various challenges involved. Can we do this with the problem of greenhouse gas emissions? Are we able to able to provide relative measures of the importance of the key contributors to greenhouse gas emissions?
+
+# **Data**
+
+The data provided has been extracted from global development data made available by the [World Bank Group](https://data.worldbank.org/), it is comprised of indicators that were categorized under the topic of climate change. An initial dataset was provided based on this data and then a subset of variables were selected that were considered relevant, plus some new variables were created based on the existing data (details below).
+
+Since the goal is to try to determine the relative affects different variables have on greenhouse gas emissions, the variable 'EN.ATM.GHGT.KT.CE' (total greenhouse gas emissions as kt of CO2 equivalent) was initially chosen as the response variable. However, it was decided that a per capita measure of emissions is a fairer way to compare nations. So a new variable was created for this called 'EN.ATM.GHGT.KT.PC' (while trying to use the same naming convention) calculated by dividing 'EN.ATM.GHGT.KT.CE' by the total population ('SP.POP.TOTL'). 
+
+To aid in some visualization, some other variables were also created: 
+
+* By classifying the total greenhouse gas emissions per capita as kt of CO2 equivalent ('EN.ATM.GHGT.KT.PC') as either 'Low', 'Medium, 'High' or 'Very High', by using the inter-quartile range of 'EN.ATM.GHGT.KT.PC'. This new variable was called 'EN.ATM.GHGT.CLS.PC'.
+* By classifying the total production of electricity by fossil fuels as either 'Low', 'Medium, 'High' or 'Very High', by summing % electricity produced by coal, natural gas and petroleum and using the inter-quartile range. This new variable was called 'EG.ELC.FOSS.CLS'.
+
+```{r data-1, message=FALSE, warning=FALSE, echo=FALSE}
+# create variable for total greenhouse gas emissions per capita as kt of CO2 equivalent
+wbcc_cln$EN.ATM.GHGT.KT.PC <- wbcc_cln$EN.ATM.GHGT.KT.CE/wbcc_cln$SP.POP.TOTL
+# get the quantiles of EN.ATM.GHGT.KT.PC
+q <- quantile(wbcc_cln$EN.ATM.GHGT.KT.PC, probs=seq(0, 1, 0.25))
+# set to low, med, high or very high for 1st, 2nd , 3rd and 4th quantile respectively
+wbcc_cln$EN.ATM.GHGT.CLS.PC <- ifelse(wbcc_cln$EN.ATM.GHGT.KT.PC <= q[1], 'Low', 
+                                   ifelse(wbcc_cln$EN.ATM.GHGT.KT.PC <= q[2], 'Medium', 
+                                          ifelse(wbcc_cln$EN.ATM.GHGT.KT.PC <= q[3], 'High', 'Very High')))
+# convert new variable to factor
+wbcc_cln$EN.ATM.GHGT.CLS.PC <- factor(wbcc_cln$EN.ATM.GHGT.CLS.PC, 
+                                   levels=c("Low","Medium","High","Very High"))
+
+# create variable for % of electricity generated by fossil fuels
+EG.ELC.FOSS.PC <- round(apply(wbcc_cln[c('EG.ELC.COAL.ZS', 'EG.ELC.NGAS.ZS', 'EG.ELC.PETR.ZS')], 
+                              1, FUN=sum), 8)
+# get the quantiles of EG.ELC.FOSS.PC
+q <- quantile(EG.ELC.FOSS.PC, probs=seq(0, 1, 0.25))
+# set to low, med, high or very high for 1st, 2nd , 3rd and 4th quantile respectively
+wbcc_cln$EG.ELC.FOSS.CLS <- ifelse(EG.ELC.FOSS.PC <= q[1], 'Low', 
+                                   ifelse(EG.ELC.FOSS.PC <= q[2], 'Medium', 
+                                          ifelse(EG.ELC.FOSS.PC <= q[3], 'High', 'Very High')))
+# convert new variable to factor
+wbcc_cln$EG.ELC.FOSS.CLS <- factor(wbcc_cln$EG.ELC.FOSS.CLS, 
+                                   levels=c("Low","Medium","High","Very High"))
+```
+
+The dataset required further cleaning as there were a number of missing values that affected the majority of the dataset, there were many indicators that were reflecting the same information, and there were also indicators that were clearly not relevant to the planned analysis. To handle removal of the indicators for the previously stated reasons, the indicators were sorted according to which had the largest number of missing values (please refer to Appendix C). This prioritized the order in which the indicators were considered to be surplus to requirements. It was considered appropriate to use a mixture of energy usage indicators, natural resource usage indicators, and some economic indicators as the predictors for greenhouse gas emissions, and the reasons for keeping or removing a variable were based on this logic as well as whether a variable was duplicating information.
+
+It was also decided to convert the electricity production indicators from percentages to kilowatts per hour. This was done by multiplying 'EG.USE.ELEC.KH.PC' (electric power consumption kWh per capita) by the percentage indicators for different energy sources (i.e. 'EG.ELC.COAL.ZS', 'EG.ELC.NUCL.ZS' etc.). This was then taken a step further to break down the predictor 'EG.USE.PCAP.KG.OE' (energy use kg of oil equivalent per capita) into energy use from electricity and other forms of energy usage. This was done by first converting 'EG.USE.PCAP.KG.OE' from units in kg of oil equivalent to units in kWh (at a ratio of 1:11.63) to match the units used by 'EG.USE.ELEC.KH.PC'. 'EG.USE.ELEC.KH.PC' was then subtracted from the converted value of 'EG.USE.PCAP.KG.OE' (in kWh) to create a new predictor called 'EG.USE.OTHR.KH.PC' (energy use from source other than electricity kWh per capita).
+
+\footnotesize
+
+```{r data-2, message=FALSE, warning=FALSE}
+wbcc_cln$EG.USE.OTHR.KH.PC <- wbcc_cln$EG.USE.PCAP.KG.OE*11.63 - wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.COAL.KH.PC <- wbcc_cln$EG.ELC.COAL.ZS * wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.HYRO.KH.PC <- wbcc_cln$EG.ELC.HYRO.ZS * wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.NGAS.KH.PC <- wbcc_cln$EG.ELC.NGAS.ZS * wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.NUCL.KH.PC <- wbcc_cln$EG.ELC.NUCL.ZS * wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.PETR.KH.PC <- wbcc_cln$EG.ELC.PETR.ZS * wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.RNWX.KH.PC <- wbcc_cln$EG.ELC.RNWX.ZS * wbcc_cln$EG.USE.ELEC.KH.PC
+wbcc_cln$EG.ELC.RNEW.KH.PC <- wbcc_cln$EG.ELC.RNWX.ZS + wbcc_cln$EG.ELC.HYRO.KH.PC
+wbcc_cln$EG.ELC.FOSS.KH.PC <- wbcc_cln$EG.ELC.COAL.KH.PC + wbcc_cln$EG.ELC.NGAS.KH.PC + wbcc_cln$EG.ELC.PETR.KH.PC
+```
+
+\normalsize
+
+At the end of this process there were 16 indicators and `r nrow(wbcc_cln)` countries left from the original dataset, please see Appendix D for the full list of indicators with their descriptions.
+
+# **Methods**
+
+Some exploratory analysis was initially conducted, first using a simple scatter plot to view the most obvious relationship, and then using principal component analysis and k-means clustering to try to determine whether patterns or relationships exist in the higher dimensional data we have. This revealed some evidence of some interesting relationships within the data. From there, linear regression was performed with feature selection to determine a model that would allow us to compare the relative impact of the most important predictors on the response. More detailed information for each of these steps is outlined in the rest of this section.
+
+A relationship that seemed like it would have a strong correlation is between the CO2 emissions per capita ('EN.ATM.CO2E.PC') and energy use per capita ('EG.USE.PCAP.KG.OE'). The scatter plot in Figure \@ref(fig:methods-1) shows this relationship based on the cleaned dataset, it also contains information about the level of fossil fuel use in electricity production:
+
+```{r methods-1, message=FALSE, warning=FALSE, echo=FALSE, fig.height=14, fig.width=14, fig.cap="Energy Us vs CO2 Emissions"}
+iso3c_hl <- as.character(wbcc_cln[wbcc_cln$EG.USE.PCAP.KG.OE > 5000 | 
+                                  wbcc_cln$EN.ATM.CO2E.PC > 10 | 
+                                  (wbcc_cln$EG.USE.PCAP.KG.OE > 2500 & wbcc_cln$EN.ATM.CO2E.PC < 5),
+                                  'iso3c'])
+
+ggplot(wbcc_cln, aes(x=EG.USE.PCAP.KG.OE, y=EN.ATM.CO2E.PC, col=EG.ELC.FOSS.CLS)) + 
+  geom_point(shape=19) + 
+  stat_cor(aes(label=..r.label..), color="red", geom="label") +
+  geom_text_repel(aes(label=ifelse(wbcc_cln$iso3c %in% iso3c_hl, 
+                                   as.character(wbcc_cln$country), '')), 
+                  size=4) + 
+  xlab("Energy use (kg of oil equivalent per capita)") + 
+  ylab("CO2 Emissions (metric tons per capita)") +
+  labs(color='Electricity Production From Fossil Fuels') + 
+  theme(legend.position="top", legend.box = "horizontal") +
+  scale_color_manual(values=c("blue", "purple", "orange", "red"))
+```
+
+There appears to be a strong positive linear relationship, however we can immediately spot some interesting outliers. Qatar, Iceland, and Trinidad and Tobago are all conspicuously anomalous, and there seems to be some clear separation between nations that have over 10 metric tons of CO2 emissions per capita. Most of the countries in this group appear to be oil producing nations e.g. U.S., Russia, Canada, some middle eastern countries etc. One of the nations that immediately pops out is Canada, when we look into the data Canada is producing 63% of it's electricity from renewable energy sources, and the very high CO2 emissions seem to be accounted for by transportation and Canada's petroleum production (and in particular it's use of tar sands for this purpose^[2](https://news.stanford.edu/2018/08/30/measuring-crude-oils-carbon-footprint)^). 
+
+```{r methods-2, message=FALSE, warning=FALSE, echo=FALSE}
+wbcc_cln[wbcc_cln$iso3c=='CAN', c('country','EG.ELC.RNEW.ZS')]
+```
+
+This highlights something interesting missing from the indicators we have available i.e. we have indicators for CO2 emissions from gaseous, liquid and solid fuel consumption, but there is no indicator for CO2 emissions from gas flaring (and potentially other high CO2 emitting activities of petroleum production). The same can be said of energy use kg of oil equivalent per capita ('EG.USE.PCAP.KG.OE'). An attempt has been made to separate out the electricity usage component from this variable (as detailed below), but we are unable to extract precise granular information about the fuel sources.
+
+Given the above, we should expect that energy use per capita ('EG.USE.PCAP.KG.OE') will also have a strong relationship with the total greenhouse gas emissions per capita ('EN.ATM.GHGT.KT.PC'). From this, plus the interest we have in exploring the relationship of different types of electricity production, it was decided that breaking down the energy use per capita to account for electricity consumption would be a good idea. The new predictors created for this were outlined in the data section above.
+
+## Data Exploration Using PCA and Clustering
+
+Some initial data exploration was performed using principal component analysis (PCA) and k-means clustering to see if we could find anything interesting in the data. All of the predictors as well as the response were used in both PCA and k-means. The silhouette width criterion (see Figure \@ref(fig:methods-kmeans)) was used to compare the performance of the clustering, this suggested that 2-means clustering might be best.
+
+```{r methods-kmeans, message=FALSE, warning=FALSE, echo=FALSE, fig.height=3, fig.width=5, fig.cap="Comparing SWC for different values of k in k-means clustering"}
+exp_cols <- c("AG.LND.AGRI.K2", "AG.LND.FRST.K2", "AG.YLD.CREL.KG", 
+              "ER.H2O.FWTL.K3", "ER.LND.PTLD.ZS", 
+              "EG.ELC.ACCS.ZS", "EG.ELC.COAL.KH.PC", "EG.ELC.HYRO.KH.PC", 
+              "EG.ELC.NGAS.KH.PC", "EG.ELC.NUCL.KH.PC", "EG.ELC.PETR.KH.PC", 
+              "EG.ELC.RNWX.KH.PC", "EG.USE.OTHR.KH.PC", 
+              "NV.AGR.TOTL.ZS", "IC.BUS.EASE.XQ", "BX.KLT.DINV.WD.GD.ZS", 
+              "EN.ATM.GHGT.KT.PC", "EN.ATM.GHGT.CLS.PC")
+wbcc_exp <- data.frame(wbcc_cln[, exp_cols])
+
+SWC <- function(clusterLabels, dataPoints) { 
+  library(cluster)
+  sil <- silhouette(x=clusterLabels, dist=dist(dataPoints))
+  return(mean(sil[,3]))
+}
+silhouette <- rep(0, 10)
+wbcc_exp.s <- scale(wbcc_exp[,1:17])
+for(k in 2:10) { 
+  km.out <- kmeans(x=wbcc_exp.s, centers=k, nstart=20)
+  silhouette[k] <- SWC(clusterLabels=km.out$cluster, dataPoints=wbcc_exp.s)
+}
+plot(2:10, silhouette[2:10], xlab="k", ylab="Silhouette Width Criterion (SWC)", type="b")
+km.out <- kmeans(x=wbcc_exp.s, centers=2, nstart=20)
+```
+
+The PCA output using the first two principal components is shown in Figure \@ref(fig:methods-pca-1), the top plot has coloured the data points according to the k-means clustering output, and in the bottom plot they are coloured by the response variable 'EN.ATM.GHGT.KT.PC' (total greenhouse gas emissions per capita kt of CO2 equivalent). Here we see evidence that the first two principal components are doing a pretty good job of explaining the response variable as we can see a clear pattern emerging. It is also evident when comparing the two plots that the k-means clustering has been effective at identifying very high emitters from the rest of the dataset in the 2 clusters.
+
+```{r methods-pca-1, message=FALSE, warning=FALSE, echo=FALSE, fig.height=14, fig.width=14, fig.cap="PCA Output Categorized by 2-means Clustering (top). And Low, Medium, High & Very High Levels of Total Greenhouse Gas Emissions Per Capita kt of CO2 Equivalent (bottom)."}
+PCA <- prcomp(wbcc_exp[,1:17], scale=T)
+ap1 <- autoplot(PCA, data=wbcc_cln, loadings=F, loadings.label=F, scale=0, shape=F, colour=km.out$cluster)
+ap2 <- autoplot(PCA, data=wbcc_exp, loadings=F, loadings.label=F, scale=0, shape=F, colour='EN.ATM.GHGT.CLS.PC') + 
+theme(legend.position="bottom")
+grid.arrange(ap1, ap2)
+```
+
+## Linear Regression and Feature Selection
+
+Given the results above, there is evidence that there is a subset of predictors that could work well in a predictive model, however the predictors in their original form don't satisfy the assumptions for linear regression. So the response and some of the predictors have been transformed to produce a model that does satisfy the assumptions for linear regression. A significant regression equation was found (F(16, 113) = 41.42, p < 0.001), with an $R^2$ of 0.85. However, as can be seen in Figure \@ref(fig:methods-qq-residuals-1), even after these transformations have been included in the model there are still issues with normality and homoscedasticity, although the linearity assumption seems to be satisfied as the residuals are not too far away from 0.
+
+\footnotesize
+
+```{r methods-lm, message=FALSE, warning=FALSE, echo=FALSE}
+wbcc_cln.lm <- lm(log(EN.ATM.GHGT.KT.PC) ~ log(EG.USE.OTHR.KH.PC) + 
+                    log(EG.ELC.COAL.KH.PC+1) + log(EG.ELC.NGAS.KH.PC+1) + 
+                    log(EG.ELC.NUCL.KH.PC+1) + log(EG.ELC.HYRO.KH.PC+1) + 
+                    log(EG.ELC.RNWX.KH.PC+1) + log(EG.ELC.PETR.KH.PC+1) + 
+                    EG.ELC.ACCS.ZS + log(AG.LND.AGRI.K2+1) + log(AG.LND.FRST.K2+1) + 
+                    AG.YLD.CREL.KG + NV.AGR.TOTL.ZS + I(1/ER.H2O.FWTL.K3) + 
+                    ER.LND.PTLD.ZS + IC.BUS.EASE.XQ + BX.KLT.DINV.WD.GD.ZS,
+                  data=wbcc_cln)
+summary(wbcc_cln.lm)
+```
+
+\normalsize
+
+```{r methods-qq-residuals-1, message=FALSE, warning=FALSE, echo=FALSE, fig.show="hold", fig.height=6, fig.width=13, fig.cap="Checking for Linearity, Homoscedasticity & Normality Using Residuals vs Fitted and Q-Q Plots in Linear Regression Model with Transformed Predictors"}
+par(mfrow=c(1,2))
+plot(wbcc_cln.lm, which=1)
+plot(wbcc_cln.lm, which=2)
+par(mfrow=c(1,1))
+```
+
+To try to fix the model assumptions, nine outliers were identified and removed from the dataset to check whether this improved the situation. Given that some of the data could be from very different time periods (since the data was collected over a 20 year period and only the latest values were included), this could explain some of these outliers and it would be preferable to remove them. But even if they are legitimate data points, it was considered safe to remove them as the goal is to find some type of gauge for the relative affect of the predictors.
+
+The new residuals vs fitted and normal Q-Q plot in Figure \@ref(fig:methods-qq-residuals-2) shows that removing the outliers means that the model now meets the normality and homoscedasticity assumptions for linear regression. R^2^ also improved to 0.91.
+
+
+```{r methods-remove-outliers-lm, message=FALSE, warning=FALSE, echo=FALSE, results=FALSE}
+wbcc_cln <- wbcc_cln[!(row.names(wbcc_cln) %in% c(196,38,94,214,29,68,183,39,142)),]
+wbcc_cln.lm <- lm(log(EN.ATM.GHGT.KT.PC) ~ log(EG.USE.OTHR.KH.PC) + 
+                    log(EG.ELC.COAL.KH.PC+1) + log(EG.ELC.NGAS.KH.PC+1) + 
+                    log(EG.ELC.NUCL.KH.PC+1) + log(EG.ELC.HYRO.KH.PC+1) + 
+                    log(EG.ELC.RNWX.KH.PC+1) + log(EG.ELC.PETR.KH.PC+1) + 
+                    EG.ELC.ACCS.ZS + log(AG.LND.AGRI.K2+1) + log(AG.LND.FRST.K2+1) + 
+                    AG.YLD.CREL.KG + NV.AGR.TOTL.ZS + I(1/ER.H2O.FWTL.K3) + 
+                    ER.LND.PTLD.ZS + IC.BUS.EASE.XQ + BX.KLT.DINV.WD.GD.ZS,
+                  data=wbcc_cln)
+summary(wbcc_cln.lm)
+```
+
+```{r methods-qq-residuals-2, message=FALSE, warning=FALSE, echo=FALSE, fig.show="hold", fig.height=6, fig.width=13, fig.cap="Residuals vs Fitted and Q-Q Plots in Linear Regression Model with Transformed Predictors, and After Outliers Have Been Removed"}
+par(mfrow=c(1,2))
+plot(wbcc_cln.lm, which=1)
+plot(wbcc_cln.lm, which=2)
+par(mfrow=c(1,1))
+```
+
+The next step was to see if the dimensions could be reduced and find the most important predictors. LASSO was considered a good approach for this as it provides feature selection, the ability to perform cross validation, and provides some indication of the order of importance of the predictors.
+
+```{r methods-lasso, message=FALSE, warning=FALSE, echo=FALSE}
+wbcc_cln.X <- model.matrix(wbcc_cln.lm)
+wbcc_cln.Y <- log(wbcc_cln$EN.ATM.GHGT.KT.PC)
+wbcc_cln.lm.lasso = glmnet(wbcc_cln.X, wbcc_cln.Y, alpha=1)
+wbcc_cln.lm.lasso.cv <- cv.glmnet(wbcc_cln.X, wbcc_cln.Y, alpha=1)
+```
+
+Since the cross validation uses a random sampling process (10-fold cross validation was used in this case), it was run multiple times (this was done manually and hasn't been included in this report). The plot of the mean-squared error (MSE) (averaged over the 10 folds) vs the natural logarithm of the penalty term, was used to help with the feature selection. The results varied in these plots from between as many as 12 variables at the minimum MSE, to as few as 3 variables at one standard error from the minimum MSE (see Figure \@ref(fig:methods-lasso-cv-1) for an example of this plot). 
+
+\footnotesize
+
+```{r methods-lasso-cv-1, message=FALSE, warning=FALSE, echo=FALSE, fig.height=7, fig.width=14, fig.cap="Comparing values of log($\\lambda$) against MSE in LASSO for Feature Selection"}
+coef(wbcc_cln.lm.lasso.cv, s=(wbcc_cln.lm.lasso.cv$lambda.1se-wbcc_cln.lm.lasso.cv$lambda.min))
+plot(wbcc_cln.lm.lasso.cv)
+```
+
+\normalsize
+
+After reviewing the results from running the cross validation multiple times, the mid-point between the minimum MSE and one standard error away was considered a good point at which to do the feature selection (the was done in R by retrieving the coefficients and supplying the lambda value by subtracting the lambda value at 1 SE from the lambda value at the minimum MSE). At this mid-point, there were usually 8 predictors left (the output in the report may differ due to the randomness of the cross validation process). These 8 predictors were most commonly:
+
+log(EG.USE.OTHR.KH.PC), log(EG.ELC.NUCL.KH.PC + 1), log(EG.ELC.HYRO.KH.PC + 1), log(EG.ELC.RNWX.KH.PC + 1), 
+log(EG.ELC.PETR.KH.PC + 1), log(AG.LND.AGRI.K2 + 1), EG.ELC.ACCS.ZS, NV.AGR.TOTL.ZS
+
+These 8 predictors will be used in the linear regression model for the analysis provided in the next section of the report. However, it was decided to also add 'log(EG.ELC.COAL.KH.PC + 1)' and 'log(EG.ELC.NGAS.KH.PC + 1)', even though they don't have much affect on the overall model, we are interested in comparing them to the other electricity usage variables.
+
+  
+# **Results and Discussion**
+
+The very low p-value for the F-statistic suggests that this model is statistically significant in predicting the response. Given the number of predictors, we can't read too much into the value of R^2^ of 0.9, however it suggests that a large part of the variance is explained by this model. Our residuals vs fitted and normal Q-Q plots in Figure \@ref(fig:results-qq-residuals) look good in regard to the model satisfying the assumptions for linear regression of linearity, homoscedasticity and normality. (See Appendix B for the linear regression equation.)
+
+\footnotesize
+
+```{r results-lm, message=FALSE, warning=FALSE, echo=FALSE}
+wbcc_cln.lm <- lm(log(EN.ATM.GHGT.KT.PC) ~ log(EG.USE.OTHR.KH.PC) + 
+                    log(EG.ELC.COAL.KH.PC+1) + log(EG.ELC.NGAS.KH.PC+1) + 
+                    log(EG.ELC.NUCL.KH.PC+1) + log(EG.ELC.HYRO.KH.PC+1) + 
+                    log(EG.ELC.RNWX.KH.PC+1) + log(EG.ELC.PETR.KH.PC+1) + 
+                    EG.ELC.ACCS.ZS + NV.AGR.TOTL.ZS + log(AG.LND.AGRI.K2+1),
+                  data=wbcc_cln)
+summary(wbcc_cln.lm)
+```
+
+\normalsize
+
+```{r results-qq-residuals, message=FALSE, warning=FALSE, echo=FALSE, fig.show="hold", fig.height=6, fig.width=13, fig.cap="Residuals vs Fitted and Q-Q Plots in Linear Regression Model with Transformed Predictors, Outliers Removed & Feature Selection Performed"}
+par(mfrow=c(1,2))
+rdp1 <- plot(wbcc_cln.lm, which=1)
+rdp2 <- plot(wbcc_cln.lm, which=2)
+par(mfrow=c(1,1))
+```
+
+The table below summarizes the percentage changes in total greenhouse gas emissions per capita as kt of CO2 equivalent, for every 1% increase in the indicator. (The conversions used to interpret the log transformed dependent and independent variables are provided in Appendix A.)
+
+Indicator|% Change in Emissions
+--|-
+Access to electricity (% of population)|&nbsp;1.07%
+Energy use other than electricity consumption (kWh per capita)|&nbsp;0.77%
+Agricultural land (sq. km)|&nbsp;0.05%
+Electricity production from oil sources (kWh per capita)|&nbsp;0.01%
+Electricity production from coal sources (kWh per capita)|&nbsp;0.01%
+Electricity production from natural gas sources (kWh per capita)|-0.01%
+Electricity production from hydroelectric sources (kWh per capita)|-0.01%
+Electricity production from nuclear sources(% of total)|-0.02%
+Electricity production from renewable sources, excl hydroelectric (kWh)|-0.02%
+Agriculture, forestry, fishing, and hunting, value added (% of GDP)|-0.81%
+
+Fortunately, seven of our ten predictors are in the same unit of measure kWh, and immediately puts into perspective relative affects of energy consumption as electricity versus energy consumption in forms that are not electricity. For example, a 1% increase in electricity consumption from coal production per capita results in a 0.01% increase in greenhouse gas emissions per capita, whereas a 1% increase in energy consumption excluding electricity per capita results in a 0.77% increase in greenhouse gas emissions, or 77 times more than coal based electricity consumption.
+
+To put the indicator for agricultural land (km^2^) into perspective, we'll use an example using data for Australia. According to the dataset, Australia has a total of `r sprintf("%.0f", (wbcc[wbcc$iso3c=='AUS','AG.LND.AGRI.K2']))` km^2^ of agricultural land, and according to the Australian Bureau of Statistics (ABS), Australia has an average farm size^[3](https://www.abs.gov.au/AUSSTATS/abs@.nsf/Lookup/7121.0Main+Features12015-16)^ of 43.31 km^2^. So a 1% increase in agricultural land (km^2^) in Australia, is the equivalent of an extra `r sprintf("%.0f", (wbcc[wbcc$iso3c=='AUS','AG.LND.AGRI.K2']/43.31))` average sized farms, resulting in an increase of 0.05% greenhouse gas emissions per capita (kt of CO2 equivalent).
+
+For agriculture, forestry, fishing, and hunting, value added (% of GDP), every 1% of GDP increase in value added results in a reduction of 0.81% in greenhouse gas emissions.
+
+And finally, for every increase of 1% of the population that has access to electricity, greenhouse gas emissions per capita (kt of CO2 equivalent) increase by 1.07%.
+
+When analyzing these results, there is one variable that sticks out above all others: energy use other than electricity consumption (kWh per capita). This variable was derived from the original indicator for energy use (kg of oil equivalent per capita), where "total energy use refers to the use of primary energy before transformation to other end-use fuels (such as electricity and refined petroleum products". Since electricity usage has been removed to create the new variable, it's safe to assume that the majority of this value is due to energy derived from oil. Unfortunately we don't have precise figures about the make up of the original energy use per capita variable, so we can't draw any definitive conclusions, however, assuming oil makes up the majority of "energy use other than electricity consumption (kWh per capita)", it dwarfs all other concerns in regard to greenhouse gas emissions, as improvements in other areas will provide fractional benefits compared to addressing the oil problem.
+
+# **Conclusions**
+
+This attempt to model the relative affects of the different contributors to greenhouse gas emissions has revealed that there is an elephant in the room in regard to reducing greenhouse gas emissions. In this report we named it: "energy use other than electricity consumption (kWh per capita)". We don't have any further information about the granular components of this variable, however, if we are to assume that it is comprised mainly of oil based energy, then addressing oil based energy appears to be the number one priority, and it could be argued that improvements in other contributors to greenhouse gas emissions are negligible in comparison.
+
+However, if we were to identify a 2nd priority, there is evidence to suggest that access to electricity is a significant factor in the amount of greenhouse gas emissions, suggesting that renewable energy in developing nations (given that this variable is most likely to rise in developing nations, and that existing infrastructure may not be as widespread), may be a better focus for investment of renewable energy solutions as a priority over developed nations, and also has the benefit of potentially creating new economic opportunities.
+
+\newpage
+
+&nbsp;
+
+\newpage
+
+# **References**
+
+1. [Josie Garthwaite. Stanford study finds stark differences in the carbon-intensity of global oil fields.](https://news.stanford.edu/2018/08/30/measuring-crude-oils-carbon-footprint)
+2. [Special Report: Global Warming of 1.5ºC.](https://www.ipcc.ch/sr15/chapter/chapter-1/)
+3. [2015-16 Agricultural Census, Australian Buruea of Statistics.](https://www.abs.gov.au/AUSSTATS/abs@.nsf/Lookup/7121.0Main+Features12015-16)
+4. [Clay Ford. Interpreting Log Transformations in a Linear Model.](https://data.library.virginia.edu/interpreting-log-transformations-in-a-linear-model/)
+
+---
+
+# **Appendix A**
+
+From [Interpreting Log Transformations in a Linear Model](https://data.library.virginia.edu/interpreting-log-transformations-in-a-linear-model/)^4^...
+
+***Both dependent/response variable and independent/predictor variable(s) are log-transformed:*** Interpret the coefficient as the percent increase in the dependent variable for every 1% increase in the independent variable.
+
+***Only the dependent/response variable is log-transformed:*** Exponentiate the coefficient, subtract one from this number, and multiply by 100. This gives the percent increase (or decrease) in the response for every one-unit increase in the independent variable. 
+
+The dependent/response variable 'EN.ATM.GHGT.KT.PC' was log transformed.
+
+So for 'EG.ELC.ACCS.ZS', a 1% increase (since the variable is already a percentage and wasn't transformed) is equal to: $(e^{0.010647} - 1) \times 100 =$ `r (exp(0.010647)-1)*100`% increase in 'EN.ATM.GHGT.KT.PC'.
+
+For 'NV.AGR.TOTL.ZS', a 1% increase (since the variable is already a percentage and wasn't transformed) is equal to: $(e^{-0.008114} - 1) \times 100 =$ `r (exp(-0.008114)-1)*100`% increase in 'EN.ATM.GHGT.KT.PC'.
+
+All other independent/predictor variables were log transformed, so the coefficients for these predictors can be interpreted as the percentage increase in 'EN.ATM.GHGT.KT.PC' for every 1% increase in the predictor.
+
+---
+
+# **Appendix B**
+
+The equation for the linear regresson model used in the analysis:
+
+\footnotesize
+
+$$
+\begin{aligned}
+log(EN.ATM.GHGT.KT.PC) = 0.77(log(EG.USE.OTHR.KH.PC)) + 0.007(log(EG.ELC.COAL.KH.PC+1)) \\
+- 0.01(log(EG.ELC.NGAS.KH.PC+1)) - 0.02(log(EG.ELC.NUCL.KH.PC+1)) \\
+- 0.01(log(EG.ELC.HYRO.KH.PC+1)) - 0.02(log(EG.ELC.RNWX.KH.PC+1)) \\
++ 0.007(log(EG.ELC.PETR.KH.PC+1)) - 0.008(NV.AGR.TOTL.ZS) \\
++ 0.01(EG.ELC.ACCS.ZS) + 0.05(log(AG.LND.AGRI.K2+1))
+\end{aligned}
+$$
+
+\normalsize
+
+---
+
+# **Appendix C**
+
+## Part I Count of missing values by indicator variable
+
+```{r appendix_b, message=FALSE, warning=FALSE}
+wbcc <- read.csv("wbcc_bc.csv", stringsAsFactors=T)
+# get a count of the number of missing values in each column
+wbcc_na_count <- data.frame(sapply(wbcc, function(y) length(which(is.na(y)))))
+# get the variable names
+variables <- rownames(wbcc_na_count)
+# get the counts
+na_count <- wbcc_na_count$sapply.wbcc..function.y..length.which.is.na.y....
+# create a data frame using the variable names and counts from above
+wbcc_na_count <- data.frame(variables, na_count)
+# sort them by count of missing value (desc)
+wbcc_na_count_sorted <- wbcc_na_count[order(wbcc_na_count$na_count, decreasing=T),]
+# show the variables with counts > 100
+head(wbcc_na_count_sorted, 20)
+```
+
+---
+
+\newpage
+
+# Appendix D
+
+The below table contains the predictors used in the analysis:
+
+Indicator|Description
+-|--
+AG.LND.AGRI.K2|Agricultural land (sq. km)
+AG.LND.FRST.K2|Forest area (sq. km)
+AG.YLD.CREL.KG|Cereal yield (kg per hectare)
+ER.H2O.FWTL.K3|Annual freshwater withdrawals, total (billion cubic meters)
+ER.PTD.TOTL.ZS|Terrestrial and marine protected areas (% of total territorial area)
+EG.ELC.ACCS.ZS|Access to electricity (% of population)
+EG.ELC.COAL.KH.PC|Electricity production from coal sources (kWh per capita)
+EG.ELC.HYRO.KH.PC|Electricity production from hydroelectric sources (kWh per capita)
+EG.ELC.NGAS.KH.PC|Electricity production from natural gas sources (kWh per capita)
+EG.ELC.NUCL.KH.PC|Electricity production from nuclear sources (kWh per capita)
+EG.ELC.PETR.KH.PC|Electricity production from oil sources (kWh per capita)
+EG.ELC.RNWX.KH.PC|Electricity production from renewable sources, excluding hydroelectric (kWh)
+EG.USE.OTHR.KH.PC|Energy use other than electricity consumption (kWh per capita)
+NV.AGR.TOTL.ZS|Agriculture, forestry, fishing, and hunting, value added (% of GDP)
+IC.BUS.EASE.XQ|Ease of doing business index (1=most business-friendly regulations)
+BX.KLT.DINV.WD.GD.ZS|Foreign direct investment, net inflows (% of GDP)
+
+Below are the countries used in the analysis (after outliers have been removed):
+
+```{r appendix-d-countries, message=FALSE, warning=FALSE, echo=FALSE}
+print(wbcc_cln[,'country'])
+```
+
+---
