@@ -1,4 +1,4 @@
-import requests, json
+import requests
 import pandas as pd
 
 pd.set_option('display.max_columns', None)
@@ -38,30 +38,33 @@ df = df.rename(
     columns={'name':'team_name', 'singular_name':'position_name'}
 )
 
+df_fpl = pd.DataFrame()
 i=0
+# iterate through each player, fetch data and add to dataframe
 for id_x in df['id_x']:
-    file_path_name = './data/fpl/' + str(id_x) + '.json'
+    
     player = df[df['id_x']==id_x]
     player_name = player['first_name'][i] + ' ' + player['second_name'][i]
+    print(f"Fetching historical season data for {player_name} [{id_x}]")
     uri = base_url + 'element-summary/' + str(id_x) + '/'
+    
+    # call the element-summary method on the fpl api to get the player's historical data
     id_x_resp = requests.get(base_url + 'element-summary/' + str(id_x) + '/').json()
-    print(f"{id_x} Saving historical season data for {player_name}.") #.format(mean_legendary_hp - mean_not_legendary_hp))
     dfr = pd.DataFrame(id_x_resp['history_past'])
+    
+    # add player's name to dataframe
     dfr.insert(0, 'second_name', [player['second_name'][i] for j in range(len(dfr))])
     dfr.insert(0, 'first_name', [player['first_name'][i] for j in range(len(dfr))])
     dfr.insert(0, 'player_name', [player_name for j in range(len(dfr))])
 
+    # check if data return non-empty
     if ('season_name' in dfr.columns):
+        # add 'season_year_ending' column
         dfr['season_year_ending'] = [2000+int(sn.split('/')[1]) for sn in dfr['season_name']]
-        # print(df_fpl.head())
+        # union this player's data to overall dataframe
         df_fpl = pd.concat([df_fpl, dfr])
-        # print(df_tmp.head())
 
-    # dfr
-    # result = dfr.to_json(orient='records')
-    # parsed = json.loads(result)
-    # json_str = json.dumps(parsed, indent=2)
-    # f = open(file_path_name, 'w')
-    # f.write(json_str)
-    # f.close()
     i+=1
+
+# save dataframe to csv file
+df_fpl.to_csv('./fantasy-premier-league/data/fpl_season_player_history.csv')

@@ -26,5 +26,5 @@ try:
 except:
     traceback.print_exc()
 finally:
-    df.to_csv('./data/players.csv')
+    df.to_csv('./fantasy-premier-league/data/fbref_season_player_history.csv')
     browse.close()
