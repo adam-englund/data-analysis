@@ -1,6 +1,13 @@
 import requests
 import pandas as pd
 
+player_positions = {
+    'Goalkeeper': 'GK',
+    'Defender': 'DF',
+    'Midfielder': 'MF',
+    'Forward': 'FW'
+}
+
 pd.set_option('display.max_columns', None)
 
 # base url for all FPL API endpoints
@@ -56,6 +63,7 @@ for id_x in df['id_x']:
     dfr.insert(0, 'second_name', [player['second_name'][i] for j in range(len(dfr))])
     dfr.insert(0, 'first_name', [player['first_name'][i] for j in range(len(dfr))])
     dfr.insert(0, 'player_name', [player_name for j in range(len(dfr))])
+    dfr.insert(0, 'player_position', [player_positions.get(player['position_name'][i]) for j in range(len(dfr))])
 
     # check if data return non-empty
     if ('season_name' in dfr.columns):
